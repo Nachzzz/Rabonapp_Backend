@@ -555,7 +555,7 @@ def init_app():
             print(id_partido)
             print(comentario)
 
-            if not not comentario or not id_partido:
+            if not comentario or not id_partido:
                 return jsonify({"msg": "Faltan datos obligatorios", "error": "ID_partido o comentario no proporcionado"}), 400
 
             query = """
