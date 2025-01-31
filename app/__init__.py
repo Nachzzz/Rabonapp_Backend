@@ -541,33 +541,4 @@ def init_app():
             print("Error al registrar el visitante:", str(e))
             return {"msg": "Error al registrar el equipo visitante"}, 500
 
-    # @app.route('/enviar-reporte', methods=['POST'])
-    # def enviar_reporte():
-    #     try:
-    #         # Obtener los datos del reporte desde el frontend
-    #         data = request.get_json()
-    #         equipo_reportado = data.get('equipo_reportado')
-    #         comentario = data.get('comentario')
-
-    #         if not equipo_reportado or not comentario:
-    #             return jsonify({'error': 'Faltan datos obligatorios'}), 400
-
-    #         # Conectar a la base de datos
-    #         db = DatabaseConnection
-
-    #         # Insertar el reporte en la base de datos
-    #         query = "INSERT INTO reportes (equipo_reportado, comentario) VALUES (%s, %s)"
-    #         db.execute_query((equipo_reportado, comentario))
-
-    #         return jsonify({'message': 'Reporte enviado correctamente'}), 200
-
-    #     except Exception as e:
-    #         return jsonify({'error': str(e)}), 500
-        
-    @app.route('/reportes', methods=['GET'])
-    def get_reportes():
-        query = "SELECT ID, ID_partido, comentario FROM reportes"
-        datos = DatabaseConnection.fetch_all(query)
-        return jsonify(datos)
-
     return app
