@@ -541,4 +541,61 @@ def init_app():
             print("Error al registrar el visitante:", str(e))
             return {"msg": "Error al registrar el equipo visitante"}, 500
 
+    @app.route('/enviar-reporte', methods=['POST'])
+    @jwt_required()
+    def reporte_partidos():
+        try:
+            current_user = get_jwt_identity()
+            data = request.get_json()
+            print("Datos recibidos en el backend:", data, current_user)  # <-- Esto mostrará los datos en la terminal
+            print(data)
+            #id_partido = data.get("ID_partido")
+            id_partido = data.get("ID_partido")
+            comentario = data.get("comentario")
+            print(id_partido)
+            print(comentario)
+
+            if not not comentario or not id_partido:
+                return jsonify({"msg": "Faltan datos obligatorios", "error": "ID_partido o comentario no proporcionado"}), 400
+
+            query = """
+                INSERT INTO rabonatest.reportes (ID_partido, comentario) VALUES (%s, %s);
+            """
+            DatabaseConnection.execute_query(query, (id_partido, comentario))
+
+            return jsonify({"msg": "Reporte enviado correctamente"}), 201
+
+        except Exception as e:
+            print("Error en el backend:", str(e))  # <-- Esto mostrará el error exacto en la terminal
+            return jsonify({"msg": "Error al generar el reporte de partidos", "error": str(e)}), 500
+
+
+    # @app.route('/partidos-de-equipo', methods=['GET'])
+    # @jwt_required()
+    # def obtener_partidos_equipo():
+    #     try:
+    #         # Obtener el equipo logueado
+    #         current_user = get_jwt_identity()  # Asumimos que el JWT contiene la identidad del usuario (equipo)
+            
+    #         # Consultar los partidos en los que este equipo ha jugado
+    #         query = """
+    #             SELECT p.ID, p.lugar, p.fecha
+    #             FROM partidos p
+    #             LEFT JOIN participacion pa ON p.ID = pa.ID_partido
+    #             GROUP BY p.ID
+    #             HAVING COUNT(pa.ID_equipo) = 2
+                
+    #         """
+    #         partidos = DatabaseConnection.fetch_all(query, (current_user,))
+            
+    #         if not partidos:
+    #             return jsonify({"msg": "No se encontraron partidos para este equipo"}), 404
+            
+    #         return jsonify(partidos), 200
+            
+    #     except Exception as e:
+    #         return jsonify({"msg": "Error al obtener los partidos del equipo", "error": str(e)}), 500
+
+
+
     return app
