@@ -22,7 +22,14 @@ class DatabaseConnection:
         cursor.execute(query, params)
         cls._connection.commit()
         return cursor
-
+    
+    @classmethod
+    def execute_query_and_return_id(cls, query, params=None):
+        cursor = cls.get_connection().cursor()
+        cursor.execute(query, params)
+        cls._connection.commit()
+        return cursor.lastrowid
+    
     @classmethod
     def fetch_one(cls, query, params=None):
         cursor = cls.get_connection().cursor(dictionary=True)
