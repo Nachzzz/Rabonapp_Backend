@@ -4,7 +4,8 @@ from .database import DatabaseConnection
 from flask_cors import CORS
 from config import Config
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-from datetime import datetime
+from datetime import datetime, timedelta
+import jwt
 
 # función para el hasheo, se utiliza en register como en login
 def hash_password(password):
@@ -25,6 +26,15 @@ def init_app():
     #Clave secreta para JWT
     app.config['JWT_SECRET_KEY'] = 'YDveI2KRL6p_LRN0xonK6ZNlsIQKa2KuulG_NusD1JQ='
     jwt = JWTManager(app)
+
+    def create_token(user_id):
+        expiration_time = datetime.utcnow() + timedelta(days=1)  # Token válido por X días
+        payload = {
+            'sub': user_id,
+            'exp': expiration_time
+        }
+        token = jwt.encode(payload, 'JWT_SECRET_KEY', algorithm='HS256')
+        return token
 
     @app.route('/')
     def home():
@@ -568,6 +578,26 @@ def init_app():
         except Exception as e:
             print("Error en el backend:", str(e))  # <-- Esto mostrará el error exacto en la terminal
             return jsonify({"msg": "Error al generar el reporte de partidos", "error": str(e)}), 500
+
+    @app.route('/equipos/<int:equipo_id>/jugadores', methods=['GET'])
+    def get_jugadores_equipo(equipo_id):
+        qry = """ 
+            SELECT jugadores.ID, jugadores.nombre, jugadores.apellido, jugadores.apodo 
+            FROM jugadores
+            JOIN jugador_equipo ON jugadores.ID = jugador_equipo.ID_jugador
+            WHERE jugador_equipo.ID_equipo = %s
+        """
+        jugadores = DatabaseConnection.fetch_all(qry, (equipo_id))
+
+        # Verifica que los jugadores sean correctos
+        if not jugadores:
+            return jsonify({"error": "No se encontraron jugadores para este equipo"}), 404
+
+        jugadores_dict = [{"id": jugador[0], "nombre": jugador[1], "apellido": jugador[2], "apodo": jugador[3]} for jugador in jugadores]
+
+        return jsonify(jugadores_dict)  # Asegúrate de que devuelves JSON aquí
+
+
 
 
     # @app.route('/partidos-de-equipo', methods=['GET'])
