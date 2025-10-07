@@ -17,7 +17,7 @@ def init_app():
 
     app = Flask(__name__)
     CORS(app, resources={
-    r"/*": {"origins": "https://n7zag33z.infinityfree.com"}
+    r"/*": {"origins": "https://rabonapp.xo.je"}
 })
 
     app.config.from_object(
