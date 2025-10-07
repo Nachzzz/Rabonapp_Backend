@@ -16,7 +16,7 @@ def hash_password(password):
 def init_app():
 
     app = Flask(__name__)
-    CORS(app)
+    CORS(app, origins=["https://rabonapp-backend.onrender.com"])
 
     app.config.from_object(
         Config
