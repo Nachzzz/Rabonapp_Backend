@@ -16,7 +16,9 @@ def hash_password(password):
 def init_app():
 
     app = Flask(__name__)
-    CORS(app, origins=["https://rabonapp-backend.onrender.com"])
+    CORS(app, resources={
+    r"/*": {"origins": "https://rabonapp-react.vercel.app"}
+})
 
     app.config.from_object(
         Config
