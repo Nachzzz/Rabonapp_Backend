@@ -5,7 +5,6 @@ from flask_cors import CORS
 from config import Config
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from datetime import datetime, timedelta
-import jwt
 
 # función para el hasheo, se utiliza en register como en login
 def hash_password(password):
@@ -23,18 +22,15 @@ def init_app():
         Config
     )
 
-    #Clave secreta para JWT
-    app.config['JWT_SECRET_KEY'] = 'YDveI2KRL6p_LRN0xonK6ZNlsIQKa2KuulG_NusD1JQ='
+    # Clave secreta para JWT (leer desde variable de entorno en producción)
+    import os
+    app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'YDveI2KRL6p_LRN0xonK6ZNlsIQKa2KuulG_NusD1JQ=')
     jwt = JWTManager(app)
 
+    # Nota: `flask_jwt_extended.create_access_token` se utiliza para generar tokens.
     def create_token(user_id):
-        expiration_time = datetime.utcnow() + timedelta(days=1)  # Token válido por X días
-        payload = {
-            'sub': user_id,
-            'exp': expiration_time
-        }
-        token = jwt.encode(payload, 'JWT_SECRET_KEY', algorithm='HS256')
-        return token
+        # wrapper ligero para mantener compatibilidad con código existente
+        return create_access_token(identity=str(user_id), expires_delta=timedelta(days=1))
 
     @app.route('/')
     def home():
@@ -73,17 +69,20 @@ def init_app():
     def registro():
         try:
             data = request.json
-            required_fields = ['nombre', 'apellido', 'email', 'paswor', 'edad', 'apodo']
-            if not all(field in data for field in required_fields):
+            # Compatibilidad: aceptar tanto 'password' como 'paswor' desde el cliente
+            required_fields = ['nombre', 'apellido', 'email', 'edad', 'apodo']
+            if not all(field in data for field in required_fields) or (('password' not in data) and ('paswor' not in data)):
                 return {"msg": "Faltan campos obligatorios."}, 400
 
             nombre = data['nombre']
             apellido = data['apellido']
             email = data['email']
-            password = hash_password(data['paswor'])  # Hash de la contraseña
+            raw_password = data.get('password') or data.get('paswor')
+            password = hash_password(raw_password)  # Hash de la contraseña
             edad = data['edad']
             apodo = data['apodo']
 
+            # La columna en la BD se llama `paswor` según la estructura existente
             query = """
                 INSERT INTO rabonatest.jugadores (nombre, apellido, email, paswor, edad, apodo)
                 VALUES (%s, %s, %s, %s, %s, %s);
@@ -117,7 +116,8 @@ def init_app():
             user_data = DatabaseConnection.fetch_one(query, (email,))
 
             if not user_data:
-                return {"msg": "Usuario no encontrado."}, 404
+                # mejorar mensaje para debugging mínimo
+                return {"msg": "Usuario no encontrado. Verifica el email."}, 404
 
             # Guardo la password obtenida en user_data
             stored_password = user_data['paswor']
@@ -189,21 +189,55 @@ def init_app():
     def get_equiposlist():
         id_jugador = get_jwt_identity()
         try:
-            query= """SELECT e.nombre  
-            FROM equipos e  
-            JOIN jugador_equipo je ON e.id = je.ID_Equipo  
-            WHERE je.ID_Jugador = %s"""
-            equipos= DatabaseConnection.fetch_all(query, (id_jugador,))
-            if not equipos:
-                return jsonify({"msg": "No hay equipos registrados."}), 404
-            
-            #print(jsonify(equipos))
-            equipos_nombre = [equipo[0] for equipo in equipos]
+            if id_jugador is None:
+                return jsonify({"msg": "No se cargo el jwt"}), 401
+
+            # Asegurarnos que usamos un int en la consulta si la BD lo espera
+            try:
+                id_int = int(id_jugador)
+            except Exception:
+                id_int = id_jugador  # fallback, dejarlo como vino
+
+            query = """
+                SELECT e.ID, e.nombre, e.escudo
+                FROM equipos e
+                JOIN jugador_equipo je ON e.ID = je.ID_Equipo
+                WHERE je.ID_Jugador = %s
+            """
+
+            filas = DatabaseConnection.fetch_all(query, (id_int,))
+
+            # Debug: loguear lo que devuelve la DB para depuración
+            print("DEBUG /equipos - id_jugador:", id_jugador, "filas:", filas)
+
+            # Normalizar respuesta: devolver siempre lista de objetos
+            if not filas:
+                return jsonify([]), 200
+
+            equipos = []
+            for f in filas:
+                # si f es dict o tupla, manejar ambos casos
+                if isinstance(f, dict):
+                    equipos.append({
+                        "id": f.get("ID") or f.get("id"),
+                        "nombre": f.get("nombre") or f.get("Nombre"),
+                        "escudo": f.get("escudo") or f.get("imagen") or None
+                    })
+                else:
+                    # tupla/lista
+                    equipos.append({
+                        "id": f[0] if len(f) > 0 else None,
+                        "nombre": f[1] if len(f) > 1 else None,
+                        "escudo": f[2] if len(f) > 2 else None
+                    })
+
             return jsonify(equipos), 200
-        
+
         except Exception as e:
-            return jsonify({"msg": "Error al botener los equipos", "error": str(e)}), 500
-        
+            import traceback
+            traceback.print_exc()  # imprime stacktrace en logs del servidor
+            return jsonify({"msg": "Error al obtener los equipos", "error": str(e)}), 500
+            
     #Equipos
     @app.route('/todoslosequipos', methods=['GET'])
     def get_equipos():
@@ -302,48 +336,103 @@ def init_app():
     @jwt_required()
     def solicitudes():
         id_jugador = get_jwt_identity()
+        # Helper para leer un campo desde dict o tupla (disponible para GET/POST/DELETE)
+        def _get_field(row, keys, idx=0):
+            if row is None:
+                return None
+            if isinstance(row, dict):
+                for k in keys:
+                    if k in row:
+                        return row[k]
+                # try case-insensitive match
+                lower_keys = {kk.lower(): kk for kk in row.keys()}
+                for k in keys:
+                    lk = k.lower()
+                    if lk in lower_keys:
+                        return row[lower_keys[lk]]
+                return None
+            else:
+                try:
+                    return row[idx]
+                except Exception:
+                    return None
+
         try:
             if request.method == 'GET':
                 qry_capitania = "SELECT ID_Equipo FROM jugador_equipo WHERE id_jugador_creador = %s AND ID_Jugador = %s"
                 dato_capitania = DatabaseConnection.fetch_one(qry_capitania, (id_jugador, id_jugador))
                 if dato_capitania is None:
-                    return jsonify({"Mensaje":"No eres capitan de equipo"})
-                
-                capitan = dato_capitania['ID_Equipo']
-                qry_solicitudes = "SELECT id_solicitud, id_jugador_solicitud, mensaje FROM solicitudes WHERE id_equipo_solicitud = %s"
-                solicitudes = DatabaseConnection.fetch_all(qry_solicitudes, (capitan,))
-                solicitudes_dict = [{"id": solicitud[0],"id_jugador_solicitud": solicitud[1], "mensaje": solicitud[2]} for solicitud in solicitudes]
-                
+                    return jsonify({"Mensaje": "No eres capitan de equipo"})
 
-                return jsonify({"Datos": solicitudes_dict})
-            
+                # Helper para leer un campo desde dict o tupla
+                def _get_field(row, keys, idx=0):
+                    if row is None:
+                        return None
+                    if isinstance(row, dict):
+                        for k in keys:
+                            if k in row:
+                                return row[k]
+                        # try case-insensitive match
+                        lower_keys = {kk.lower(): kk for kk in row.keys()}
+                        for k in keys:
+                            lk = k.lower()
+                            if lk in lower_keys:
+                                return row[lower_keys[lk]]
+                        return None
+                    else:
+                        try:
+                            return row[idx]
+                        except Exception:
+                            return None
+
+                capitan = _get_field(dato_capitania, ['ID_Equipo', 'id_equipo', 'ID_EQUIPO'], idx=0)
+                qry_solicitudes = "SELECT id_solicitud, id_jugador_solicitud, mensaje FROM solicitudes WHERE id_equipo_solicitud = %s"
+                solicitudes = DatabaseConnection.fetch_all(qry_solicitudes, (capitan,)) or []
+
+                solicitudes_list = []
+                for s in solicitudes:
+                    if isinstance(s, dict):
+                        sid = _get_field(s, ['id_solicitud', 'id', 'ID'], idx=0)
+                        jid = _get_field(s, ['id_jugador_solicitud', 'id_jugador', 'ID_JUGADOR'], idx=1)
+                        msg = _get_field(s, ['mensaje', 'mensaje'], idx=2)
+                    else:
+                        sid = s[0] if len(s) > 0 else None
+                        jid = s[1] if len(s) > 1 else None
+                        msg = s[2] if len(s) > 2 else None
+
+                    solicitudes_list.append({"id": sid, "id_jugador_solicitud": jid, "mensaje": msg})
+
+                return jsonify({"Datos": solicitudes_list})
+
             elif request.method == 'POST':
-                
                 data = request.json
-                id_jugador_solicitud = data['id_jugador_solicitud'] #Solo se recolecta el id del jugador del Json enviado
+                id_jugador_solicitud = data['id_jugador_solicitud']  # Solo se recolecta el id del jugador del Json enviado
                 qry_id_equipo = "SELECT ID_Equipo FROM jugador_equipo WHERE id_jugador_creador = %s AND ID_Jugador = %s"
                 id_equipo_dict = DatabaseConnection.fetch_one(qry_id_equipo, (id_jugador, id_jugador))
-                id_equipo = id_equipo_dict['ID_Equipo'] #ID donde el jugador es capitan
-                #Insertar en jugador_equipo
+                id_equipo = _get_field(id_equipo_dict, ['ID_Equipo', 'id_equipo'], idx=0) if id_equipo_dict else None
+                if id_equipo is None:
+                    return jsonify({"Mensaje": "No eres capitan de equipo"}), 400
+
+                # Insertar en jugador_equipo
                 inscribir = "INSERT INTO jugador_equipo (ID_Jugador, ID_Equipo, id_jugador_creador) VALUES (%s, %s, %s)"
                 DatabaseConnection.execute_query(inscribir, (id_jugador_solicitud, id_equipo, id_jugador))
-                
-                #Eliminar la solicitud de la tabla solicitudes
+
+                # Eliminar la solicitud de la tabla solicitudes
                 eliminar_solicitud = "DELETE FROM solicitudes WHERE id_jugador_solicitud = %s AND id_equipo_solicitud = %s"
                 DatabaseConnection.execute_query(eliminar_solicitud, (id_jugador_solicitud, id_equipo))
-                
-                
+
                 return jsonify({'Mensaje': 'Solicitud del jugador aceptada con exito'})
+
             elif request.method == 'DELETE':
                 data = request.json
                 id_solicitud = data.get('id_solicitud')
                 qry_delete = "DELETE FROM solicitudes WHERE (id_solicitud = %s)"
-
                 DatabaseConnection.execute_query(qry_delete, (id_solicitud,))
-
                 return jsonify({'Mensaje': 'Solicitud eliminada con exito'})
         except Exception as e:
-            return jsonify({"Mensaje": str(e)}),500
+            import traceback
+            traceback.print_exc()
+            return jsonify({"Mensaje": str(e)}), 500
         
     #crear enfrentamiento
     @app.route("/crearEnfrentamiento", methods=["POST"])
@@ -479,6 +568,30 @@ def init_app():
             print("Error al procesar la solicitud:", str(e))
             return {"msg": "Error al procesar los datos"}, 500
 
+    # @app.route("/partidosSinVisitante", methods=["GET"])
+    # @jwt_required()
+    # def partidosSinVisitante():
+    #     try:
+    #         db = DatabaseConnection()
+    #         query = """
+    #         SELECT p.ID, p.lugar, p.fecha
+    #         FROM partidos p
+    #         LEFT JOIN participacion pa ON p.ID = pa.ID_partido
+    #         GROUP BY p.ID
+    #         HAVING COUNT(pa.ID_equipo) = 1
+    #         """
+    #         partidos = db.fetch_all(query)
+
+    #         if partidos is None:
+    #             return jsonify([]), 200  # Si no hay partidos, devuelve lista vacía
+
+    #         # Convierte los resultados a diccionarios
+    #         lista_partidos = [{"ID": p[0], "lugar": p[1], "fecha": str(p[2])} for p in partidos]
+
+    #         return jsonify(lista_partidos), 200
+    #     except Exception as e:
+    #         print("Error:", e)
+    #         return jsonify({"msg": "Error al obtener partidos"}), 500
     @app.route("/partidosSinVisitante", methods=["GET"])
     @jwt_required()
     def partidosSinVisitante():
@@ -493,17 +606,41 @@ def init_app():
             """
             partidos = db.fetch_all(query)
 
-            if partidos is None:
+            if not partidos:
                 return jsonify([]), 200  # Si no hay partidos, devuelve lista vacía
 
-            # Convierte los resultados a diccionarios
-            lista_partidos = [{"ID": p[0], "lugar": p[1], "fecha": str(p[2])} for p in partidos]
+            lista_partidos = []
+            for idx, p in enumerate(partidos):
+                # Soportar filas como dicts o secuencias (tuplas/listas)
+                try:
+                    if isinstance(p, dict):
+                        pid = p.get('ID') or p.get('id') or None
+                        lugar = p.get('lugar') or p.get('Lugar') or p.get('ubicacion') or None
+                        fecha = p.get('fecha') or p.get('date') or None
+                    else:
+                        # secuencia: acceder por índice con guardias
+                        pid = p[0] if len(p) > 0 else None
+                        lugar = p[1] if len(p) > 1 else None
+                        fecha = p[2] if len(p) > 2 else None
+
+                    # Asegurarse de que la fecha sea una cadena (JSON serializable)
+                    fecha_str = str(fecha) if fecha is not None else None
+
+                    lista_partidos.append({"ID": pid, "lugar": lugar, "fecha": fecha_str})
+                except Exception as e_row:
+                    # Log para depuración del row problemático y continuar
+                    import traceback
+                    traceback.print_exc()
+                    current_app.logger.warning(f"partidosSinVisitante: fila inesperada en index {idx}: {p} -> {e_row}")
+                    # Añadir una entrada nula en lugar de romper toda la respuesta
+                    lista_partidos.append({"ID": None, "lugar": None, "fecha": None})
 
             return jsonify(lista_partidos), 200
-        except Exception as e:
-            print("Error:", e)
-            return jsonify({"msg": "Error al obtener partidos"}), 500
 
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({"msg": "Error al obtener partidos", "error": str(e)}), 500
 
         
     @app.route("/registrarVisitante/<int:partido_id>", methods=["POST"])
@@ -587,45 +724,71 @@ def init_app():
             JOIN jugador_equipo ON jugadores.ID = jugador_equipo.ID_jugador
             WHERE jugador_equipo.ID_equipo = %s
         """
-        jugadores = DatabaseConnection.fetch_all(qry, (equipo_id))
+        # Pasar el parámetro como una tupla de un elemento
+        jugadores = DatabaseConnection.fetch_all(qry, (equipo_id,)) or []
 
-        # Verifica que los jugadores sean correctos
+        # Normalizar respuesta: si no hay jugadores devolver lista vacía (200)
         if not jugadores:
-            return jsonify({"error": "No se encontraron jugadores para este equipo"}), 404
+            return jsonify([]), 200
 
-        jugadores_dict = [{"id": jugador[0], "nombre": jugador[1], "apellido": jugador[2], "apodo": jugador[3]} for jugador in jugadores]
+        jugadores_list = []
+        for jugador in jugadores:
+            if isinstance(jugador, dict):
+                jugadores_list.append({
+                    "id": jugador.get('ID') or jugador.get('id'),
+                    "nombre": jugador.get('nombre'),
+                    "apellido": jugador.get('apellido'),
+                    "apodo": jugador.get('apodo')
+                })
+            else:
+                jugadores_list.append({
+                    "id": jugador[0] if len(jugador) > 0 else None,
+                    "nombre": jugador[1] if len(jugador) > 1 else None,
+                    "apellido": jugador[2] if len(jugador) > 2 else None,
+                    "apodo": jugador[3] if len(jugador) > 3 else None
+                })
 
-        return jsonify(jugadores_dict)  # Asegúrate de que devuelves JSON aquí
-
-
-
-
-    # @app.route('/partidos-de-equipo', methods=['GET'])
-    # @jwt_required()
-    # def obtener_partidos_equipo():
-    #     try:
-    #         # Obtener el equipo logueado
-    #         current_user = get_jwt_identity()  # Asumimos que el JWT contiene la identidad del usuario (equipo)
-            
-    #         # Consultar los partidos en los que este equipo ha jugado
-    #         query = """
-    #             SELECT p.ID, p.lugar, p.fecha
-    #             FROM partidos p
-    #             LEFT JOIN participacion pa ON p.ID = pa.ID_partido
-    #             GROUP BY p.ID
-    #             HAVING COUNT(pa.ID_equipo) = 2
-                
-    #         """
-    #         partidos = DatabaseConnection.fetch_all(query, (current_user,))
-            
-    #         if not partidos:
-    #             return jsonify({"msg": "No se encontraron partidos para este equipo"}), 404
-            
-    #         return jsonify(partidos), 200
-            
-    #     except Exception as e:
-    #         return jsonify({"msg": "Error al obtener los partidos del equipo", "error": str(e)}), 500
+        return jsonify(jugadores_list)
 
 
+    @app.route('/equipos/<int:equipo_id>', methods=['DELETE'])
+    @jwt_required()
+    def eliminar_equipo(equipo_id):
+        """Eliminar un equipo sólo si el usuario autenticado es el creador (capitán)."""
+        try:
+            id_jugador = get_jwt_identity()
+
+            # Verificar si el jugador es creador/capitan del equipo
+            qry_capitan = "SELECT ID_Equipo FROM jugador_equipo WHERE ID_Equipo = %s AND id_jugador_creador = %s LIMIT 1"
+            capitan = DatabaseConnection.fetch_one(qry_capitan, (equipo_id, id_jugador))
+            if not capitan:
+                return jsonify({"msg": "No autorizado: no eres el creador/capitán del equipo"}), 403
+
+            # Borrar relaciones dependientes de forma segura
+            # 1) eliminar participaciones en partidos
+            qry_delete_participacion = "DELETE FROM participacion WHERE ID_equipo = %s"
+            DatabaseConnection.execute_query(qry_delete_participacion, (equipo_id,))
+
+            # 2) eliminar solicitudes relacionadas con el equipo
+            qry_delete_solicitudes = "DELETE FROM solicitudes WHERE id_equipo_solicitud = %s"
+            DatabaseConnection.execute_query(qry_delete_solicitudes, (equipo_id,))
+
+            # 3) eliminar relaciones jugador_equipo
+            qry_delete_jugador_equipo = "DELETE FROM jugador_equipo WHERE ID_Equipo = %s"
+            DatabaseConnection.execute_query(qry_delete_jugador_equipo, (equipo_id,))
+
+            # 4) eliminar el equipo
+            qry_delete_equipo = "DELETE FROM equipos WHERE ID = %s"
+            affected = DatabaseConnection.execute_query(qry_delete_equipo, (equipo_id,))
+
+            if affected is None:
+                return jsonify({"msg": "Error al eliminar el equipo"}), 500
+
+            return jsonify({"msg": "Equipo eliminado correctamente"}), 200
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({"msg": "Error al eliminar el equipo", "error": str(e)}), 500
 
     return app

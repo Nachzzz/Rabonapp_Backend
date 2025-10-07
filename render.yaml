@@ -1,0 +1,24 @@
+# Optional Render service configuration template
+# Useful as reference when creating a Web Service on Render
+
+services:
+  - type: web
+    name: rabonapp-backend
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn run:app --bind 0.0.0.0:$PORT --workers 2 --threads 2"
+    envVars:
+      - key: MYSQLUSER
+        sync: false
+      - key: MYSQLPASSWORD
+        sync: false
+      - key: MYSQLHOST
+        sync: false
+      - key: MYSQLPORT
+        sync: false
+      - key: MYSQLDATABASE
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false

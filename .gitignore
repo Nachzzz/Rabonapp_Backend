@@ -1,10 +1,28 @@
-# Ignorar el entorno virtual
+# Entornos virtuales
+.venv/
 venv/
+env/
 
-# Ignorar cachés de Python
+# Cachés de Python
 __pycache__/
 *.py[cod]
 
-# Ignorar archivos de logs
+# Archivos de logs
 *.log
+
+# Configs de editor
+.vscode/
+
+# Variables de entorno
+.env
+
+# Vercel
 .vercel
+
+# Otros
+*.db
+*.sqlite3
+htmlcov/
+.pytest_cache/
+coverage.xml
+*.egg-info/
